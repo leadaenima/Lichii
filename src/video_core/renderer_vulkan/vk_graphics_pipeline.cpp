@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
 #include "common/bit_field.h"
+#include "common/logging.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -1236,6 +1237,19 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
 
+    // AMDVLK can die inside vkCreateGraphicsPipelines (Eglantine #618, offset ~0xafe857).
+    // Log hashes before the call so a crash dump's last line names the pipeline.
+    if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+        device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+        std::string shaders = fmt::format("pipeline={:016x}", key.Hash());
+        for (size_t stage = 0; stage < key.unique_hashes.size(); ++stage) {
+            if (key.unique_hashes[stage] != 0) {
+                shaders += fmt::format(" s{}:{:016x}", stage, key.unique_hashes[stage]);
+            }
+        }
+        LOG_INFO(Render_Vulkan, "Creating graphics pipeline: {}", shaders);
+    }
     pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = nullptr,

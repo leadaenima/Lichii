@@ -280,6 +280,11 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             .basePipelineHandle = 0,
             .basePipelineIndex = 0,
         };
+        if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+            device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+            device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+            LOG_INFO(Render_Vulkan, "Creating compute pipeline: shader={:016x}", shader_hash);
+        }
         try {
             pipeline = device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
         } catch (const vk::Exception& exception) {

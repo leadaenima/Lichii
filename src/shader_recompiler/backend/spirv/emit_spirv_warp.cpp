@@ -91,7 +91,8 @@ Id GuestLane(EmitContext& ctx, Id index) {
 }
 
 Id ShuffleAbsolute(EmitContext& ctx, Id value, Id src_thread_id) {
-    if (!ctx.profile.has_broken_spirv_subgroup_shuffle) {
+    if (!ctx.profile.has_broken_spirv_subgroup_shuffle &&
+        !ctx.profile.has_broken_spirv_dynamic_subgroup_shuffle) {
         return ctx.OpGroupNonUniformShuffle(ctx.U32[1], SubgroupScope(ctx), value, src_thread_id);
     }
     Id result{ctx.u32_zero_value};

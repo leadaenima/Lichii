@@ -104,6 +104,9 @@ struct Profile {
     /// Some drivers have broken support for OpVectorExtractDynamic on subgroup mask inputs
     bool has_broken_spirv_subgroup_mask_vector_extract_dynamic{};
     bool has_broken_spirv_subgroup_shuffle{};
+    /// AMDVLK crashes inside vkCreateGraphicsPipelines on some OpGroupNonUniformShuffle modules
+    /// (Eglantine #618: dynamic-lane SHFL.IDX). Emit a broadcast loop instead. Not RADV.
+    bool has_broken_spirv_dynamic_subgroup_shuffle{};
     u32 max_subgroup_size{};
 
     u32 gl_max_compute_smem_size{};
