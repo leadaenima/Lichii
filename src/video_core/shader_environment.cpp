@@ -358,27 +358,40 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    const u32 index{Tegra::Texture::TextureHeaderIndex(handle.first, tic_limit,
-                                                       gpu_memory->UsesNativeTiling())};
-    ASSERT(index <= tic_limit);
-    const GPUVAddr descriptor_addr{tic_addr + index * sizeof(Tegra::Texture::TICEntry)};
+    const auto index{Tegra::Texture::ResolveTextureHeaderIndex(
+        handle.first, tic_limit, gpu_memory->UsesNativeTiling())};
+    if (!index) {
+        static std::atomic<u32> skipped{};
+        if (skipped.fetch_add(1, std::memory_order_relaxed) < 16) {
+            LOG_WARNING(HW_GPU,
+                        "Skipping out-of-range shader TIC: program={:#x} stage={} handle={:#x} "
+                        "tic_id={:#x} limit={}",
+                        program_base, static_cast<u32>(stage), raw, handle.first, tic_limit);
+        }
+        return Tegra::Texture::Color2DFallbackHeader();
+    }
+    const GPUVAddr descriptor_addr{tic_addr + u64{*index} * sizeof(Tegra::Texture::TICEntry)};
+    if (!gpu_memory->IsFullyMappedRange(descriptor_addr, sizeof(Tegra::Texture::TICEntry))) {
+        return Tegra::Texture::Color2DFallbackHeader();
+    }
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
-    if (entry.format.Value() == Tegra::Texture::TextureFormat{} &&
-        std::getenv("EDEN_NX2_RENDER_TRACE")) {
-        static std::atomic<u32> traces{};
-        if (traces.fetch_add(1, std::memory_order_relaxed) < 64) {
-            LOG_WARNING(HW_GPU,
-                        "Zero-format shader TIC: program={:#x} stage={} handle={:#x} "
-                        "index={} limit={} descriptor={:#x} mapped={} image={:#x} "
-                        "size={}x{}x{} header={} type={} raw={:016x}/{:016x}/{:016x}/{:016x}",
-                        program_base, static_cast<u32>(stage), raw, index, tic_limit,
-                        descriptor_addr, gpu_memory->IsFullyMappedRange(descriptor_addr, sizeof(entry)),
-                        entry.Address(), entry.Width(), entry.Height(), entry.Depth(),
-                        static_cast<u32>(entry.header_version.Value()),
-                        static_cast<u32>(entry.texture_type.Value()),
-                        entry.raw[0], entry.raw[1], entry.raw[2], entry.raw[3]);
+    if (entry.format.Value() == Tegra::Texture::TextureFormat{}) {
+        if (std::getenv("EDEN_NX2_RENDER_TRACE")) {
+            static std::atomic<u32> traces{};
+            if (traces.fetch_add(1, std::memory_order_relaxed) < 64) {
+                LOG_WARNING(HW_GPU,
+                            "Zero-format shader TIC: program={:#x} stage={} handle={:#x} "
+                            "index={} limit={} descriptor={:#x} mapped={} image={:#x} "
+                            "size={}x{}x{} header={} type={} raw={:016x}/{:016x}/{:016x}/{:016x}",
+                            program_base, static_cast<u32>(stage), raw, *index, tic_limit,
+                            descriptor_addr, true, entry.Address(), entry.Width(), entry.Height(),
+                            entry.Depth(), static_cast<u32>(entry.header_version.Value()),
+                            static_cast<u32>(entry.texture_type.Value()), entry.raw[0], entry.raw[1],
+                            entry.raw[2], entry.raw[3]);
+            }
         }
+        return Tegra::Texture::Color2DFallbackHeader();
     }
     return entry;
 }

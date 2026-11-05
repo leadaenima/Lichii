@@ -835,6 +835,9 @@ boost::container::small_vector<ImageCopy, 16> MakeReinterpretImageCopies(const I
 }
 
 bool IsValidEntry(const Tegra::MemoryManager& gpu_memory, const TICEntry& config) {
+    if (config.format.Value() == Tegra::Texture::TextureFormat{}) {
+        return false;
+    }
     const GPUVAddr address = config.Address();
     if (address == 0) {
         return false;

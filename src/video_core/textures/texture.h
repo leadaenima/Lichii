@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/common_types.h"
@@ -176,6 +177,18 @@ static_assert(sizeof(TextureHandle) == 4, "TextureHandle has wrong size");
     return index;
 }
 
+/// Decode a Switch 2 header-offset handle, then reject indices that still sit past the pool.
+/// VisitImageView already returns a null view for those; shader TIC reads must do the same so
+/// they do not compile a pipeline from unmapped or garbage headers.
+[[nodiscard]] constexpr std::optional<u32> ResolveTextureHeaderIndex(u32 index, u32 limit,
+                                                                     bool switch2) {
+    const u32 resolved{TextureHeaderIndex(index, limit, switch2)};
+    if (resolved > limit) {
+        return std::nullopt;
+    }
+    return resolved;
+}
+
 struct TICEntry {
     union {
         struct {
@@ -297,6 +310,21 @@ struct TICEntry {
     }
 };
 static_assert(sizeof(TICEntry) == 0x20, "TICEntry has wrong size");
+
+/// Known 2D RGBA8 header used when a shader handle does not name a header in the pool.
+/// Matches the pixel-format table's existing unimplemented fallback, so the compiled
+/// descriptor type agrees with the null image view bound at draw time.
+[[nodiscard]] constexpr TICEntry Color2DFallbackHeader() {
+    TICEntry entry{};
+    entry.format.Assign(TextureFormat::A8B8G8R8);
+    entry.r_type.Assign(ComponentType::UNORM);
+    entry.g_type.Assign(ComponentType::UNORM);
+    entry.b_type.Assign(ComponentType::UNORM);
+    entry.a_type.Assign(ComponentType::UNORM);
+    entry.texture_type.Assign(TextureType::Texture2D);
+    entry.normalized_coords.Assign(1);
+    return entry;
+}
 
 enum class WrapMode : u32 {
     Wrap = 0,

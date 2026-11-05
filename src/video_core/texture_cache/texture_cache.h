@@ -865,12 +865,13 @@ typename P::Framebuffer* TextureCache<P>::GetFramebuffer() {
 template <class P>
 ImageViewId TextureCache<P>::VisitImageView(u32 index, bool compute) {
     auto& table = compute ? channel_state->compute_image_table : channel_state->graphics_image_table;
-    index = Tegra::Texture::TextureHeaderIndex(index, table.current_limit,
-                                               gpu_memory->UsesNativeTiling());
-    if (index > table.current_limit) {
+    const auto resolved = Tegra::Texture::ResolveTextureHeaderIndex(
+        index, table.current_limit, gpu_memory->UsesNativeTiling());
+    if (!resolved) {
         LOG_TRACE(HW_GPU, "Invalid image view index={}", index);
         return NULL_IMAGE_VIEW_ID;
     }
+    index = *resolved;
     auto const [descriptor, is_new] = table.Read(*gpu_memory, index);
     if (is_new) {
         if (IsValidEntry(*gpu_memory, descriptor)) {
