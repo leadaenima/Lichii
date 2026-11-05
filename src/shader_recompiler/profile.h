@@ -105,7 +105,8 @@ struct Profile {
     bool has_broken_spirv_subgroup_mask_vector_extract_dynamic{};
     bool has_broken_spirv_subgroup_shuffle{};
     /// AMDVLK crashes inside vkCreateGraphicsPipelines on some OpGroupNonUniformShuffle modules
-    /// (Eglantine #618: dynamic-lane SHFL.IDX). Emit a broadcast loop instead. Not RADV.
+    /// (Eglantine #618: dynamic-lane SHFL.IDX). Graphics emit a 32-lane broadcast loop instead.
+    /// Compute keeps Shuffle: the broadcast loop hung AMDVLK for minutes. Not RADV.
     bool has_broken_spirv_dynamic_subgroup_shuffle{};
     u32 max_subgroup_size{};
 

@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 
@@ -91,12 +93,21 @@ Id GuestLane(EmitContext& ctx, Id index) {
 }
 
 Id ShuffleAbsolute(EmitContext& ctx, Id value, Id src_thread_id) {
-    if (!ctx.profile.has_broken_spirv_subgroup_shuffle &&
-        !ctx.profile.has_broken_spirv_dynamic_subgroup_shuffle) {
+    // AMDVLK faults on dynamic-lane Shuffle in graphics (#618) and hangs for minutes on the
+    // Broadcast-select loop in compute. Keep Shuffle for compute; graphics use a 32-lane loop
+    // (guest warp). Qualcomm still replaces every Shuffle.
+    const bool replace_shuffle =
+        ctx.profile.has_broken_spirv_subgroup_shuffle ||
+        (ctx.profile.has_broken_spirv_dynamic_subgroup_shuffle && ctx.stage != Stage::Compute);
+    if (!replace_shuffle) {
         return ctx.OpGroupNonUniformShuffle(ctx.U32[1], SubgroupScope(ctx), value, src_thread_id);
     }
+    u32 loop_lanes = ctx.profile.max_subgroup_size;
+    if (ctx.profile.has_broken_spirv_dynamic_subgroup_shuffle) {
+        loop_lanes = std::min(loop_lanes, 32u);
+    }
     Id result{ctx.u32_zero_value};
-    for (u32 lane = 0; lane < ctx.profile.max_subgroup_size; ++lane) {
+    for (u32 lane = 0; lane < loop_lanes; ++lane) {
         const Id read{
             ctx.OpGroupNonUniformBroadcast(ctx.U32[1], SubgroupScope(ctx), value, ctx.Const(lane))};
         const Id matches{ctx.OpIEqual(ctx.U1, src_thread_id, ctx.Const(lane))};
