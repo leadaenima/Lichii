@@ -284,4 +284,7 @@ void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& fi
     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
     Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics);
 
+/// EDEN_NX2_REJECT_HASH=<hash>,... matches native program keys and shader unique_hashes.
+[[nodiscard]] bool HashRejectedByEnv(u64 hash);
+
 } // namespace VideoCommon

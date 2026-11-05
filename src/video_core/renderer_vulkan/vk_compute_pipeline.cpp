@@ -287,6 +287,11 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         }
         try {
             pipeline = device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
+            if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+                LOG_INFO(Render_Vulkan, "Created compute pipeline: shader={:016x}", shader_hash);
+            }
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Adreno rejected compute shader {:016X}: {}", shader_hash,
                          exception.what());

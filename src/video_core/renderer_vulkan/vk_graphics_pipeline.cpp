@@ -1271,6 +1271,11 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
+    if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+        device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+        LOG_INFO(Render_Vulkan, "Created graphics pipeline: pipeline={:016x}", key.Hash());
+    }
 
     // Log graphics pipeline creation
     if (GPU::Logging::IsActive()) {
