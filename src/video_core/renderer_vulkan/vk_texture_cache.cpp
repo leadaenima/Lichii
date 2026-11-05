@@ -4576,6 +4576,17 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
     VariantKey key{};
     key.reduce_anisotropy = has_added_anisotropy && !image_view.SupportsAnisotropy();
     key.force_nearest = has_linear_filtering && IsPixelFormatInteger(image_view.format);
+    // AMDVLK/RADV Dref-sample a colour view (OoT TEX.DC on a garbage TIC, #173) as 0/1, which
+    // looks like black or scrambled mips. NVIDIA needed that compare left on (Alan Wake
+    // flashlight, eden #4408). Match the shader: keep compare only for a real depth image.
+    if (has_depth_comparison && device_ptr != nullptr) {
+        const VkDriverIdKHR driver = device_ptr->GetDriverID();
+        const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                         driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                         driver == VK_DRIVER_ID_MESA_RADV;
+        key.drop_depth_comparison =
+            amd && (!is_depth || !image_view.SupportsDepthComparison());
+    }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
     key.srgb_border = has_srgb_border_color && IsPixelFormatSRGB(image_view.format);
@@ -4652,6 +4663,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
     } else if (key.reduce_anisotropy) {
         create_info.anisotropyEnable = static_cast<VkBool32>(default_anisotropy > 1.0f);
         create_info.maxAnisotropy = default_anisotropy;
+    }
+    if (key.drop_depth_comparison) {
+        create_info.compareEnable = VK_FALSE;
     }
     if (!custom_border) {
         create_info.borderColor = ConvertBorderColor(color);
