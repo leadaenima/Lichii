@@ -23,6 +23,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_host_policy.h"
 #include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_profile.h"
@@ -200,7 +201,7 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
             return value == nullptr ? -1 : (value[0] == '0' ? 0 : 1);
         }();
         const bool inline_writes =
-            forced >= 0 ? forced == 1 : Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+            forced >= 0 ? forced == 1 : Tegra::Nx2OnDemandCpuReadback();
         if (inline_writes && IsRegionRegistered(device_addr, size)) {
             tmp_buffer.resize_destructive(size);
             device_memory.ReadBlockUnsafe(device_addr, tmp_buffer.data(), size);
@@ -261,11 +262,13 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     };
     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
                                            device_addr_end_aligned - device_addr_start_aligned);
-    // A preflushable mark persists and downloads later GPU writes at every fence. Ampere
+    // A preflushable mark persists and downloads later GPU writes at every fence. Switch 2
     // titles instead keep read traps and flush on demand (zortos293/Lichii#147): the mark
-    // was ~800 MB/s of fence copies on High accuracy in Ocarina (#163). No env override.
+    // was ~800 MB/s of fence copies on High accuracy in Ocarina (#163). Harvest 93597b5c38
+    // on RX 6800: g_nx2_ampere stayed 0 while the split ran, so the Ampere-only gate never
+    // fired. Key off Switch 2 / split as well. No env override.
     if (!area->preemtive) {
-        if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        if (!Tegra::Nx2OnDemandCpuReadback()) {
             memory_tracker.MarkRegionAsPreflushable(
                 device_addr_start_aligned, device_addr_end_aligned - device_addr_start_aligned);
         } else {

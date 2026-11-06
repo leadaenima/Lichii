@@ -20,6 +20,10 @@ namespace Tegra {
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
 
+// AMD proprietary/open: Low + GPU-thread split flickers overlays (Lichii #163).
+// Set from the Vulkan device; Module::Module clears it with the other session flags.
+inline std::atomic<bool> g_nx2_host_split_unsafe{false};
+
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Title 1
 // runs command lists the GPU writes each frame (20-byte entries its culling fills in); read
 // without a flush they are stale and the draws behind them (trees) go missing. The bits never

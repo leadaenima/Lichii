@@ -227,6 +227,11 @@ const u32 GuestWarpSize = 32;
            id == VK_DRIVER_ID_MESA_RADV;
 }
 
+/// AMDVLK Low+SPLIT flickers map/text overlays (Lichii #163; RX 6800 OoT harvest).
+[[nodiscard]] inline bool DriverGpuSplitFlickers(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+}
+
 enum class NvidiaArchitecture {
     Arch_KeplerOrOlder,
     Arch_Maxwell,

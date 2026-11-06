@@ -4610,6 +4610,9 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
         const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
                          driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                          driver == VK_DRIVER_ID_MESA_RADV;
+        // Harvest 93597b5c38: both kept and dropped stay high. Prior A/Bs already
+        // failed drop-all, keep-TEX.DC, and this intersection for grain. The cavern
+        // god-ray is a volume/RT, not a compare sample. Do not flip this again.
         key.drop_depth_comparison = amd && !(is_depth && image_view.SupportsDepthComparison());
         VideoCommon::OotDiag::Add(key.drop_depth_comparison ? VideoCommon::OotDiag::C::DrefDropped
                                                             : VideoCommon::OotDiag::C::DrefKept);

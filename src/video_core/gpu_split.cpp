@@ -25,6 +25,7 @@
 #include "video_core/engines/engine_interface.h"
 #include "video_core/gpu_split.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_host_policy.h"
 #include "video_core/nx2_profile.h"
 
 namespace VideoCommon {
@@ -92,7 +93,15 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         return value != nullptr ? value[0] : '2';
     }();
     const bool wanted = mode == '1' || mode == '2';
-    if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+    if (!wanted || !Tegra::Nx2HostGpuSplitAllowed()) {
+        if (active) {
+            Drain();
+            Stop();
+            LOG_INFO(HW_GPU, "GPU thread split: stopped, host driver flickers with Low+SPLIT");
+        }
+        return;
+    }
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
     }
     // The front reads command lists straight from guest memory; a read that flushes the caches

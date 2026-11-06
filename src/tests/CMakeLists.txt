@@ -78,6 +78,7 @@ add_executable(tests
     video_core/pipeline_cache_files.cpp
     video_core/amd_astc_decode.cpp
     video_core/oot_diag.cpp
+    video_core/nx2_host_policy.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
     video_core/gpu_command_safety.cpp
