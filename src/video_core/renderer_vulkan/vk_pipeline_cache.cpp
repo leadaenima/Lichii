@@ -43,6 +43,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_environment.h"
 #include "video_core/shader_notify.h"
@@ -506,6 +507,10 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
         .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
+        .has_broken_spirv_dynamic_subgroup_shuffle =
+            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+            driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+            driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY,
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
             device.IsNvidia() && device.GetNvidiaArch() <= NvidiaArchitecture::Arch_Pascal,
@@ -1099,6 +1104,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     bool build_in_parallel) try {
     auto hash = key.Hash();
     LOG_DEBUG(Render_Vulkan, "{:#016x}", hash);
+    for (const u64 shader_hash : key.unique_hashes) {
+        if (shader_hash != 0 && (VideoCommon::HashRejectedByEnv(shader_hash) ||
+                                 VideoCore::Nx2Debug::IsRejected(shader_hash))) {
+            LOG_INFO(Render_Vulkan,
+                     "Skipping graphics pipeline={:016x}: shader={:016x} rejected by EDEN_NX2_REJECT_HASH",
+                     hash, shader_hash);
+            return nullptr;
+        }
+    }
     size_t env_index{0};
     std::array<Shader::IR::Program, Maxwell::MaxShaderProgram> programs;
     const bool uses_vertex_a{key.unique_hashes[0] != 0};
@@ -1401,6 +1415,13 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     ShaderPools& pools, const ComputePipelineCacheKey& key, Shader::Environment& env,
     PipelineStatistics* statistics, bool build_in_parallel) try {
     auto hash = key.Hash();
+    if (VideoCommon::HashRejectedByEnv(key.unique_hash) ||
+        VideoCore::Nx2Debug::IsRejected(key.unique_hash)) {
+        LOG_INFO(Render_Vulkan,
+                 "Skipping compute pipeline: shader={:016x} rejected by EDEN_NX2_REJECT_HASH",
+                 key.unique_hash);
+        return {.failure = "rejected by EDEN_NX2_REJECT_HASH"};
+    }
     if (device.HasBrokenCompute()) {
         LOG_ERROR(Render_Vulkan, "Skipping {:#016x}", hash);
         return {.failure = "Device reports broken compute support"};

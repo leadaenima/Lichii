@@ -61,6 +61,8 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_host_policy.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -434,6 +436,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         return;
     }
 
+    TracePendingCpuWrites(false, pipeline->ShaderHashes());
     TraceRenderState(is_indexed, "configured", texture_cache.GetFramebuffer());
     if (frame_dump.Capturing()) {
         FrameDumpPass(texture_cache.GetFramebuffer());
@@ -1338,6 +1341,7 @@ void RasterizerVulkan::DispatchCompute() {
         }
         frame_dump.CaptureDispatch(pipeline->ShaderHash(), written);
     };
+    TracePendingCpuWrites(true, std::array{pipeline->ShaderHash()});
     if (frame_dump.CapturingSampled()) {
         boost::container::small_vector<FrameDump::Sampled, 16> sampled;
         for (const auto& image : pipeline->SampledImages()) {
@@ -1490,7 +1494,8 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
 bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
     if ((True(which & VideoCommon::CacheType::BufferCache))) {
         std::scoped_lock lock{buffer_cache.mutex};
-        if (buffer_cache.IsRegionGpuModified(addr, size)) {
+        if (buffer_cache.IsRegionGpuModified(addr, size) &&
+            !Tegra::Nx2SkipSynchronousBufferDownload()) {
             return true;
         }
     }
@@ -1502,6 +1507,10 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
         return texture_cache.IsRegionGpuModified(addr, size);
     }
     return false;
+}
+
+bool RasterizerVulkan::HasPendingQueries(DAddr addr, u64 size) {
+    return query_cache.IsRegionGpuModified(addr, size);
 }
 
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {
@@ -1801,6 +1810,36 @@ void RasterizerVulkan::TraceRenderState(bool is_indexed, const char* outcome,
               static_cast<u32>(regs.render_enable_override));
 }
 
+void RasterizerVulkan::TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes) {
+    // Guest CPU writes into GPU-written buffer memory are collected, and applied to the host
+    // buffers only at the next fence or cache invalidation. A hit here reads the older bytes.
+    static const bool enabled = std::getenv("EDEN_NX2_PENDING_WRITE_TRACE") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    static constexpr u64 max_lines = 100000;
+    static u64 lines{};
+    buffer_cache.ForEachBoundBuffer(compute, [&](u32 stage, bool storage, u32 index, bool written,
+                                                 const auto& binding, u32 bound_size,
+                                                 const auto*, u32) {
+        if (lines > max_lines || !gpu.HasPendingCPUWrites(binding.device_addr, bound_size)) {
+            return;
+        }
+        if (++lines > max_lines) {
+            LOG_INFO(HW_GPU, "Pending write trace stopped after {} lines", max_lines);
+            return;
+        }
+        const size_t program = compute ? 0 : stage + 1;
+        LOG_INFO(HW_GPU,
+                 "Pending CPU write frame={} {} shader={:016x} stage={} {}[{}]{} addr={:#x} "
+                 "device={:#x} size={:#x}",
+                 render_trace_frame, compute ? "dispatch" : "draw",
+                 program < shader_hashes.size() ? shader_hashes[program] : 0, stage,
+                 storage ? "ssbo" : "cbuf", index, written ? " written" : "", binding.gpu_addr,
+                 binding.device_addr, bound_size);
+    });
+}
+
 void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
     std::array<ImageView*, VideoCommon::NUM_RT> colors{};
     const auto& ids = texture_cache.GetRenderTargets().color_buffer_ids;
@@ -1891,6 +1930,7 @@ void RasterizerVulkan::TickFrame() {
         std::scoped_lock lock{texture_cache.mutex};
         texture_cache.TickFrame();
     }
+    VideoCommon::OotDiag::MaybeReport();
     {
         std::scoped_lock lock{buffer_cache.mutex};
         buffer_cache.TickFrame();

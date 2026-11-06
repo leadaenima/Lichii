@@ -469,7 +469,11 @@ void SetupCapabilities(const Profile& profile, const Info& info, EmitContext& ct
     if (info.uses_sparse_residency) {
         ctx.AddCapability(spv::Capability::SparseResidency);
     }
-    if (info.uses_demote_to_helper_invocation && profile.support_demote_to_helper_invocation) {
+    const bool alpha_test_discards =
+        ctx.stage == Stage::Fragment && ctx.runtime_info.alpha_test_func.has_value() &&
+        *ctx.runtime_info.alpha_test_func != Shader::CompareFunction::Always;
+    if ((info.uses_demote_to_helper_invocation || alpha_test_discards) &&
+        profile.support_demote_to_helper_invocation) {
         if (profile.supported_spirv < 0x00010600) {
             ctx.AddExtension("SPV_EXT_demote_to_helper_invocation");
         }

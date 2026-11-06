@@ -221,6 +221,48 @@ enum class FormatType { Linear, Optimal, Buffer };
 /// Subgroup size of the guest emulated hardware (Nvidia has 32 threads per subgroup).
 const u32 GuestWarpSize = 32;
 
+/// AMD has no native ASTC. GPU transcode only Flush()es the decode.
+[[nodiscard]] inline bool DriverPrefersHostAstcDecode(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+           id == VK_DRIVER_ID_MESA_RADV;
+}
+
+/// AMDVLK Low+SPLIT flickers map/text overlays (Lichii #163; RX 6800 OoT harvest).
+[[nodiscard]] inline bool DriverGpuSplitFlickers(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+}
+
+/// AMD LINEAR+mip Dref is 0/1 noise, not PCF. Keep compare; sample LOD 0 nearest.
+/// 60e7915dfc: dropped=0, kept thousands, shade still crushed until light hits.
+[[nodiscard]] inline bool DriverNeedsNearestLod0DepthCompare(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+           id == VK_DRIVER_ID_MESA_RADV;
+}
+
+inline void ApplyNearestLod0DepthCompare(VkSamplerCreateInfo& ci) noexcept {
+    ci.magFilter = VK_FILTER_NEAREST;
+    ci.minFilter = VK_FILTER_NEAREST;
+    ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    ci.anisotropyEnable = VK_FALSE;
+    ci.maxAnisotropy = 1.0f;
+    ci.minLod = 0.0f;
+    ci.maxLod = 0.25f;
+}
+
+/// OoT scene lighting FS (Lichii #210). AMD proprietary miscompiles it optimized.
+inline constexpr u64 kNx2OotAmdLightingFragmentHash = 0x3c2193d0166610b3ULL;
+
+/// AMDVLK 2.0.353: lighting FS crashes/miscompiles; two compute shaders take minutes.
+[[nodiscard]] inline bool AmdProprietaryUnoptimizedShader(u64 shader_hash) noexcept {
+    return shader_hash == kNx2OotAmdLightingFragmentHash ||
+           shader_hash == 0xeff3ccbe1438679dULL || shader_hash == 0xf9ea14a22394f5b1ULL;
+}
+
+[[nodiscard]] inline bool DriverBuildsUnoptimizedShaders(VkDriverIdKHR id,
+                                                         u64 shader_hash) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY && AmdProprietaryUnoptimizedShader(shader_hash);
+}
+
 enum class NvidiaArchitecture {
     Arch_KeplerOrOlder,
     Arch_Maxwell,
@@ -436,6 +478,14 @@ FN_MAX_LIMIT_LIST
 
     bool IsOptimalAstcSupported() const {
         return is_optimal_astc_supported;
+    }
+
+    /// AMD has no native ASTC. The GPU compute decoder + BC encoder only Flush()es
+    /// (EDEN_NX2_ASTC_FLUSH default), so the next submit can sample a half-written
+    /// BC3 image: shade-concentrated dither, map/text flash, and a flush per texture.
+    /// Host ASTC::Decompress then BC3 encode is the path those A/Bs never reached.
+    bool PreferHostAstcDecode() const {
+        return DriverPrefersHostAstcDecode(GetDriverID());
     }
 
     /// Returns true if geometry shaders are supported.

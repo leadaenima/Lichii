@@ -25,6 +25,7 @@
 #include "video_core/engines/engine_interface.h"
 #include "video_core/gpu_split.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_host_policy.h"
 #include "video_core/nx2_profile.h"
 
 namespace VideoCommon {
@@ -87,12 +88,33 @@ void GpuSplit::CheckOwner(const char* where) {
 GpuSplit GpuSplit::instance;
 
 void GpuSplit::MaybeStart(Core::System& system_) {
+    // Host driver check is first and is not optional. a3e94f6b08 logged "split
+    // disabled" at Device ctor, then Module cleared the flag and this function
+    // started the back thread. EDEN_NX2_SPLIT cannot override an AMDVLK host.
+    if (!Tegra::Nx2HostGpuSplitAllowed()) {
+        static std::atomic<bool> refused_logged{};
+        if (!refused_logged.exchange(true, std::memory_order_relaxed)) {
+            LOG_INFO(HW_GPU,
+                     "GPU thread split: refused by MaybeStart, host driver_id={} "
+                     "(AMDVLK Low+SPLIT)",
+                     Tegra::g_nx2_vk_driver_id.load(std::memory_order_relaxed));
+        }
+        if (active) {
+            Drain();
+            Stop();
+            LOG_INFO(HW_GPU, "GPU thread split: stopped, host driver flickers with Low+SPLIT");
+        }
+        return;
+    }
     static const char mode = [] {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
         return value != nullptr ? value[0] : '2';
     }();
     const bool wanted = mode == '1' || mode == '2';
-    if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+    if (!wanted) {
+        return;
+    }
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
     }
     // The front reads command lists straight from guest memory; a read that flushes the caches
@@ -114,6 +136,8 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     system = &system_;
     check_owner = std::getenv("EDEN_NX2_SPLIT_CHECK") != nullptr;
     ring = std::make_unique<u64[]>(RingWords);
+    // Sole start site. HostDriver check above must have passed; do not start the
+    // back thread from anywhere else.
     back_thread = std::jthread([this](std::stop_token stop_token) { BackLoop(stop_token); });
     active = true;
     const char* jit = std::getenv("EDEN_NX2_MME_JIT");

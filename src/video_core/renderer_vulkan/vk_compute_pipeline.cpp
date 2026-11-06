@@ -133,7 +133,10 @@ void TraceUpscalerDispatch(UpscalerTrace& trace, const Shader::Info& info, u64 s
     std::vector<Range> ssbos;
     for (size_t index = 0; index < info.storage_buffers_descriptors.size(); ++index) {
         const auto& desc{info.storage_buffers_descriptors[index]};
-        const GPUVAddr slot{qmd.const_buffer_config[desc.cbuf_index].Address() + desc.cbuf_offset};
+        GPUVAddr slot{qmd.const_buffer_config[desc.cbuf_index].Address() + desc.cbuf_offset};
+        if (desc.indirect_offset != ~0U) {
+            slot = gpu_memory.Read<u64>(slot) + desc.indirect_offset;
+        }
         const GPUVAddr address{gpu_memory.Read<u64>(slot)};
         const auto device_address{address ? gpu_memory.GpuToCpuAddress(address) : std::nullopt};
         u32 size{};
@@ -260,6 +263,11 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         if (uses_descriptor_buffer) {
             flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         }
+        if (BuildsUnoptimized(device, shader_hash)) {
+            flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+            LOG_INFO(Render_Vulkan, "AMD: building compute shader {:016x} unoptimized",
+                     shader_hash);
+        }
         const VkComputePipelineCreateInfo compute_ci{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .pNext = nullptr,
@@ -280,8 +288,18 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             .basePipelineHandle = 0,
             .basePipelineIndex = 0,
         };
+        if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+            device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+            device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+            LOG_INFO(Render_Vulkan, "Creating compute pipeline: shader={:016x}", shader_hash);
+        }
         try {
             pipeline = device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
+            if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+                LOG_INFO(Render_Vulkan, "Created compute pipeline: shader={:016x}", shader_hash);
+            }
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Adreno rejected compute shader {:016X}: {}", shader_hash,
                          exception.what());
@@ -346,7 +364,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     for (const auto& desc : info.storage_buffers_descriptors) {
         ASSERT(desc.count == 1);
         buffer_cache.BindComputeStorageBuffer(ssbo_index, desc.cbuf_index, desc.cbuf_offset,
-                                              desc.is_written);
+                                              desc.is_written, desc.indirect_offset);
         ++ssbo_index;
     }
 

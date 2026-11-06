@@ -917,19 +917,22 @@ private:
             if (node.type != Type::Block) {
                 continue;
             }
-            if (branch_depth > 1) {
-                // Skip reordering nested demote branches.
-                continue;
-            }
+            bool has_demote{};
+            bool has_epilogue{};
             for (const IR::Inst& inst : node.data.block->Instructions()) {
                 const IR::Opcode op{inst.GetOpcode()};
-                if (op == IR::Opcode::DemoteToHelperInvocation) {
-                    demote_blocks.push_back(node.data.block);
-                    break;
-                }
-                if (op == IR::Opcode::Epilogue) {
-                    ++num_epilogues;
-                }
+                has_demote |= op == IR::Opcode::DemoteToHelperInvocation;
+                has_epilogue |= op == IR::Opcode::Epilogue;
+            }
+            // Nested demotes stay in place; only top-level ones are combined.
+            if (has_demote && branch_depth <= 1) {
+                demote_blocks.push_back(node.data.block);
+            }
+            // Count returns at any depth. A nested EXIT (if (P0) { if (P1) return; }) was
+            // previously skipped, so this pass moved the demote past that return and the
+            // invocation wrote unset colour.
+            if (has_epilogue) {
+                ++num_epilogues;
             }
         }
         if (demote_blocks.size() == 0) {

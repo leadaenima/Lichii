@@ -113,6 +113,8 @@ add_library(video_core STATIC
     native_qmd.h
     native_query_trace.h
     nx2.h
+    nx2_host_policy.h
+    nx2_oot_diag.h
     nx2_cmdpage_diag.h
     nx2_debug_control.cpp
     nx2_debug_control.h
@@ -127,6 +129,7 @@ add_library(video_core STATIC
     query_cache/query_stream.h
     query_cache/types.h
     query_cache.h
+    query_dma.h
     rasterizer_interface.h
     renderer_base.cpp
     renderer_base.h

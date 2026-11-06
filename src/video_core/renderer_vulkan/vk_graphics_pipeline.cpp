@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
 #include "common/bit_field.h"
+#include "common/logging.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -419,7 +420,8 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             for (const auto& desc : info.storage_buffers_descriptors) {
                 ASSERT(desc.count == 1);
                 buffer_cache.BindGraphicsStorageBuffer(stage, ssbo_index, desc.cbuf_index,
-                                                       desc.cbuf_offset, desc.is_written);
+                                                       desc.cbuf_offset, desc.is_written,
+                                                       desc.indirect_offset);
                 ++ssbo_index;
             }
         }
@@ -1206,7 +1208,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
         .pDynamicStates = dynamic_states.data(),
     };
-    [[maybe_unused]] const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
+    const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
         .pNext = nullptr,
         .requiredSubgroupSize = GuestWarpSize,
@@ -1216,17 +1218,23 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         if (!spv_modules[stage]) {
             continue;
         }
-        [[maybe_unused]] auto& stage_ci =
-            shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .stage = StageFlag(stage_infos[stage],
-                                   MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage))),
-                .module = *spv_modules[stage],
-                .pName = "main",
-                .pSpecializationInfo = nullptr,
-            });
+        const Shader::Info& info{stage_infos[stage]};
+        const bool uses_warp_ops = info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
+                                   info.uses_subgroup_shuffles || info.uses_subgroup_mask ||
+                                   info.uses_quad_shuffles || info.uses_fswzadd;
+        auto& stage_ci = shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = StageFlag(info, MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage))),
+            .module = *spv_modules[stage],
+            .pName = "main",
+            .pSpecializationInfo = nullptr,
+        });
+        if (device.IsExtSubgroupSizeControlSupported() && uses_warp_ops &&
+            device.IsGuestWarpSizeSupported(stage_ci.stage)) {
+            stage_ci.pNext = &subgroup_size_ci;
+        }
     }
     VkPipelineCreateFlags flags{};
     if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
@@ -1235,7 +1243,27 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (uses_descriptor_buffer) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
+    if (std::ranges::any_of(key.unique_hashes, [this](u64 hash) {
+            return hash != 0 && BuildsUnoptimized(device, hash);
+        })) {
+        flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+        LOG_INFO(Render_Vulkan,
+                 "AMD: building pipeline {:016x} unoptimized (OoT lighting)", key.Hash());
+    }
 
+    // AMDVLK can die inside vkCreateGraphicsPipelines (Eglantine #618, offset ~0xafe857).
+    // Log hashes before the call so a crash dump's last line names the pipeline.
+    if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+        device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+        std::string shaders = fmt::format("pipeline={:016x}", key.Hash());
+        for (size_t stage = 0; stage < key.unique_hashes.size(); ++stage) {
+            if (key.unique_hashes[stage] != 0) {
+                shaders += fmt::format(" s{}:{:016x}", stage, key.unique_hashes[stage]);
+            }
+        }
+        LOG_INFO(Render_Vulkan, "Creating graphics pipeline: {}", shaders);
+    }
     pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = nullptr,
@@ -1257,6 +1285,11 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
+    if (device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY ||
+        device.GetDriverID() == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        device.GetDriverID() == VK_DRIVER_ID_SAMSUNG_PROPRIETARY) {
+        LOG_INFO(Render_Vulkan, "Created graphics pipeline: pipeline={:016x}", key.Hash());
+    }
 
     // Log graphics pipeline creation
     if (GPU::Logging::IsActive()) {

@@ -69,6 +69,9 @@ public:
 
     [[nodiscard]] bool IsCbufStorageBufferPointer(u32 index, u32 offset) override;
 
+    [[nodiscard]] bool IsCbufIndirectStorageBufferPointer(u32 index, u32 offset,
+                                                          u32 indirect) override;
+
     [[nodiscard]] std::optional<u64> Analyze();
 
     void SetCachedSize(size_t size_bytes);
@@ -225,6 +228,9 @@ public:
 
     [[nodiscard]] bool IsCbufStorageBufferPointer(u32 index, u32 offset) override;
 
+    [[nodiscard]] bool IsCbufIndirectStorageBufferPointer(u32 index, u32 offset,
+                                                          u32 indirect) override;
+
     [[nodiscard]] u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) override;
 
     [[nodiscard]] Shader::TextureType ReadTextureType(u32 handle) override;
@@ -283,5 +289,8 @@ void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::
 void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
     Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics);
+
+/// EDEN_NX2_REJECT_HASH=<hash>,... matches native program keys and shader unique_hashes.
+[[nodiscard]] bool HashRejectedByEnv(u64 hash);
 
 } // namespace VideoCommon

@@ -29,6 +29,7 @@
 #include "common/settings_enums.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
+#include "video_core/nx2.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -480,6 +481,11 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const bool is_amd_driver =
         driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
     const bool is_amd = is_amd_driver || is_radv;
+    Tegra::Nx2NoteHostVulkanDriver(static_cast<u32>(driver_id));
+    if (DriverGpuSplitFlickers(driver_id)) {
+        LOG_INFO(Render_Vulkan,
+                 "AMD: GPU thread split disabled (Low+SPLIT flickers; RX 6800 OoT map/text flash)");
+    }
 
     const bool is_intel_windows = driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
 

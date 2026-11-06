@@ -274,6 +274,28 @@ TEST_CASE("Texture arrays reserve the final static and buffer resources",
     }
 }
 
+TEST_CASE("LD.128 extracts keep a computed shadow-map handle",
+          "[video_core][texture_handles]") {
+    HandleProgram shader;
+    const Value record{shader.Emit(Opcode::LoadStorage128, {Value{0U}, Value{0x10U}})};
+    const Value handle{shader.Emit(Opcode::CompositeExtractU32x4, {record, Value{1U}})};
+    auto& sample{shader.Sample(handle)};
+    shader.Run();
+
+    REQUIRE(shader.program.info.handle_programs.size() == 1);
+    CHECK(shader.Descriptor(sample).handle_program != ~0U);
+    const auto result{Shader::EvaluateHandleProgram(
+        shader.program.info.handle_programs[shader.Descriptor(sample).handle_program],
+        [](u32, u32) -> u32 { throw std::logic_error("Unexpected evaluator cbuf read"); },
+        [](u32 binding, u32 offset) {
+            REQUIRE(binding == 0);
+            REQUIRE(offset == 0x14);
+            return 0x9abcdef0U;
+        })};
+    REQUIRE(result.has_value());
+    CHECK(*result == 0x9abcdef0U);
+}
+
 TEST_CASE("Failed Phi handle subtrees discard their cached values",
           "[video_core][texture_handles]") {
     for (const bool nested : {false, true}) {

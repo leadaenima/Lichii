@@ -80,25 +80,33 @@ void AlphaTest(EmitContext& ctx) {
     const Id rt0_color{ctx.OpLoad(ctx.F32[4], ctx.frag_color[0])};
     const Id alpha{ctx.OpCompositeExtract(type, rt0_color, 3u)};
 
-    const Id true_label{ctx.OpLabel()};
+    const Id merge{ctx.OpLabel()};
     const Id discard_label{ctx.OpLabel()};
     const Id alpha_reference{ctx.Const(ctx.runtime_info.alpha_test_reference)};
     const Id condition{ComparisonFunction(ctx, comparison, alpha, alpha_reference)};
 
-    ctx.OpSelectionMerge(true_label, spv::SelectionControlMask::MaskNone);
-    ctx.OpBranchConditional(condition, true_label, discard_label);
+    ctx.OpSelectionMerge(merge, spv::SelectionControlMask::MaskNone);
+    ctx.OpBranchConditional(condition, merge, discard_label);
     ctx.AddLabel(discard_label);
-    ctx.OpKill();
-    ctx.AddLabel(true_label);
+    // OpKill after the color store flickers alpha-tested geometry on AMDVLK (OoT leaves).
+    // Demote discards the fragment and still lets the shader terminate cleanly.
+    if (ctx.profile.support_demote_to_helper_invocation) {
+        ctx.OpDemoteToHelperInvocationEXT();
+        ctx.OpBranch(merge);
+    } else {
+        ctx.OpKill();
+    }
+    ctx.AddLabel(merge);
 }
 } // Anonymous namespace
 
 void EmitPrologue(EmitContext& ctx) {
     if (ctx.stage == Stage::Fragment && ctx.runtime_info.dual_source_blend) {
-        // Initialize dual-source blending outputs - prevents MoltenVK crash.
+        // Write both dual-source outputs (MoltenVK crashes if they are undefined). Unused src1
+        // must be zero: default alpha 1 made OneMinusSource1Alpha wipe the dest, so fog/overlays
+        // that never store RT1 looked fully opaque.
         const Id zero{ctx.Const(0.0f)};
-        const Id one{ctx.Const(1.0f)};
-        const Id default_color{ctx.ConstantComposite(ctx.F32[4], zero, zero, zero, one)};
+        const Id default_color{ctx.ConstantComposite(ctx.F32[4], zero, zero, zero, zero)};
         for (u32 i = 0; i < 2; ++i) {
             if (Sirit::ValidId(ctx.frag_color[i])) {
                 ctx.OpStore(ctx.frag_color[i], default_color);

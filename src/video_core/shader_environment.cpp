@@ -46,6 +46,18 @@ namespace VideoCommon {
 
 constexpr std::array<char, 8> MAGIC_NUMBER{'y', 'u', 'z', 'u', 'c', 'a', 'c', 'h'};
 
+bool HashRejectedByEnv(u64 hash) {
+    static const std::string reject_hashes = [] {
+        const char* text = std::getenv("EDEN_NX2_REJECT_HASH");
+        std::string list = text ? "," + std::string{text} + "," : std::string{};
+        std::ranges::transform(list, list.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return list;
+    }();
+    return !reject_hashes.empty() &&
+           reject_hashes.find(fmt::format(",{:016x},", hash)) != std::string::npos;
+}
+
 constexpr size_t INST_SIZE = sizeof(u64);
 
 using Maxwell = Tegra::Engines::Maxwell3D::Regs;
@@ -59,6 +71,12 @@ static u64 NativeShaderHash(std::span<const u64> code) {
 
 static u64 MakeCbufKey(u32 index, u32 offset) {
     return (static_cast<u64>(index) << 32) | offset;
+}
+
+// Pointer-table entries share the classification map with plain constant buffer pointers.
+static u64 MakeIndirectCbufKey(u32 index, u32 offset, u32 indirect) {
+    return (u64{1} << 63) | (static_cast<u64>(indirect & 0x3fffff) << 40) |
+           MakeCbufKey(index, offset);
 }
 
 static Shader::TextureType ConvertTextureType(const Tegra::Texture::TICEntry& entry) {
@@ -198,6 +216,25 @@ bool GenericEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
                         (u64{ReadCbufValue(index, offset + 4)} << 32);
     const bool mapped = address != 0 && gpu_memory->IsWithinGPUAddressRange(address) &&
                         gpu_memory->IsFullyMappedRange(address, 1);
+    storage_pointer_types.emplace(key, static_cast<u8>(mapped));
+    return mapped;
+}
+
+bool GenericEnvironment::IsCbufIndirectStorageBufferPointer(u32 index, u32 offset, u32 indirect) {
+    const u64 key = MakeIndirectCbufKey(index, offset, indirect);
+    if (const auto it = storage_pointer_types.find(key); it != storage_pointer_types.end()) {
+        return it->second != 0;
+    }
+    bool mapped = false;
+    if (IsCbufStorageBufferPointer(index, offset)) {
+        const u64 holder =
+            u64{ReadCbufValue(index, offset)} | (u64{ReadCbufValue(index, offset + 4)} << 32);
+        if (gpu_memory->IsFullyMappedRange(holder + indirect, sizeof(u64))) {
+            const u64 address = gpu_memory->Read<u64>(holder + indirect);
+            mapped = address != 0 && gpu_memory->IsWithinGPUAddressRange(address) &&
+                     gpu_memory->IsFullyMappedRange(address, 1);
+        }
+    }
     storage_pointer_types.emplace(key, static_cast<u8>(mapped));
     return mapped;
 }
@@ -358,27 +395,40 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    const u32 index{Tegra::Texture::TextureHeaderIndex(handle.first, tic_limit,
-                                                       gpu_memory->UsesNativeTiling())};
-    ASSERT(index <= tic_limit);
-    const GPUVAddr descriptor_addr{tic_addr + index * sizeof(Tegra::Texture::TICEntry)};
+    const auto index{Tegra::Texture::ResolveTextureHeaderIndex(
+        handle.first, tic_limit, gpu_memory->UsesNativeTiling())};
+    if (!index) {
+        static std::atomic<u32> skipped{};
+        if (skipped.fetch_add(1, std::memory_order_relaxed) < 16) {
+            LOG_WARNING(HW_GPU,
+                        "Skipping out-of-range shader TIC: program={:#x} stage={} handle={:#x} "
+                        "tic_id={:#x} limit={}",
+                        program_base, static_cast<u32>(stage), raw, handle.first, tic_limit);
+        }
+        return Tegra::Texture::Color2DFallbackHeader();
+    }
+    const GPUVAddr descriptor_addr{tic_addr + u64{*index} * sizeof(Tegra::Texture::TICEntry)};
+    if (!gpu_memory->IsFullyMappedRange(descriptor_addr, sizeof(Tegra::Texture::TICEntry))) {
+        return Tegra::Texture::Color2DFallbackHeader();
+    }
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
-    if (entry.format.Value() == Tegra::Texture::TextureFormat{} &&
-        std::getenv("EDEN_NX2_RENDER_TRACE")) {
-        static std::atomic<u32> traces{};
-        if (traces.fetch_add(1, std::memory_order_relaxed) < 64) {
-            LOG_WARNING(HW_GPU,
-                        "Zero-format shader TIC: program={:#x} stage={} handle={:#x} "
-                        "index={} limit={} descriptor={:#x} mapped={} image={:#x} "
-                        "size={}x{}x{} header={} type={} raw={:016x}/{:016x}/{:016x}/{:016x}",
-                        program_base, static_cast<u32>(stage), raw, index, tic_limit,
-                        descriptor_addr, gpu_memory->IsFullyMappedRange(descriptor_addr, sizeof(entry)),
-                        entry.Address(), entry.Width(), entry.Height(), entry.Depth(),
-                        static_cast<u32>(entry.header_version.Value()),
-                        static_cast<u32>(entry.texture_type.Value()),
-                        entry.raw[0], entry.raw[1], entry.raw[2], entry.raw[3]);
+    if (entry.format.Value() == Tegra::Texture::TextureFormat{}) {
+        if (std::getenv("EDEN_NX2_RENDER_TRACE")) {
+            static std::atomic<u32> traces{};
+            if (traces.fetch_add(1, std::memory_order_relaxed) < 64) {
+                LOG_WARNING(HW_GPU,
+                            "Zero-format shader TIC: program={:#x} stage={} handle={:#x} "
+                            "index={} limit={} descriptor={:#x} mapped={} image={:#x} "
+                            "size={}x{}x{} header={} type={} raw={:016x}/{:016x}/{:016x}/{:016x}",
+                            program_base, static_cast<u32>(stage), raw, *index, tic_limit,
+                            descriptor_addr, true, entry.Address(), entry.Width(), entry.Height(),
+                            entry.Depth(), static_cast<u32>(entry.header_version.Value()),
+                            static_cast<u32>(entry.texture_type.Value()), entry.raw[0], entry.raw[1],
+                            entry.raw[2], entry.raw[3]);
+            }
         }
+        return Tegra::Texture::Color2DFallbackHeader();
     }
     return entry;
 }
@@ -641,18 +691,10 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     Shader::Ampere::AppendNativeAddressMap(lowered_code, lowered.source_instruction_offsets);
     // EDEN_NX2_REJECT_HASH=<hash>,...: like EDEN_NX2_REJECT, but by native program key (shader
     // dump file names) or shader hash (frame dump "shaders"), which stay the same between runs.
-    if (static const std::string reject_hashes = [] {
-            const char* text = std::getenv("EDEN_NX2_REJECT_HASH");
-            std::string list = text ? "," + std::string{text} + "," : std::string{};
-            std::ranges::transform(list, list.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return list;
-        }();
-        !reject_hashes.empty()) {
-        for (const u64 hash : {result->native_program_key, NativeShaderHash(lowered_code)}) {
-            if (reject_hashes.find(fmt::format(",{:016x},", hash)) != std::string::npos) {
-                throw Shader::RuntimeError("Native shader at {:#x} ({:016x}) rejected by EDEN_NX2_REJECT_HASH",
-                                           program_base, hash);
-            }
+    for (const u64 hash : {result->native_program_key, NativeShaderHash(lowered_code)}) {
+        if (HashRejectedByEnv(hash)) {
+            throw Shader::RuntimeError("Native shader at {:#x} ({:016x}) rejected by EDEN_NX2_REJECT_HASH",
+                                       program_base, hash);
         }
     }
     // The same list, changed at runtime by the debug server (docs/nx2/debug-mcp.md).
@@ -1109,6 +1151,14 @@ bool FileEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
     const auto it = storage_pointer_types.find(MakeCbufKey(index, offset));
     if (it == storage_pointer_types.end()) {
         throw Shader::LogicError("Uncached storage pointer classification");
+    }
+    return it->second != 0;
+}
+
+bool FileEnvironment::IsCbufIndirectStorageBufferPointer(u32 index, u32 offset, u32 indirect) {
+    const auto it = storage_pointer_types.find(MakeIndirectCbufKey(index, offset, indirect));
+    if (it == storage_pointer_types.end()) {
+        throw Shader::LogicError("Uncached storage pointer table classification");
     }
     return it->second != 0;
 }

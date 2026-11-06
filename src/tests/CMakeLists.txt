@@ -23,6 +23,7 @@ add_executable(tests
     video_core/texture_rect_descriptor.cpp
     audio_core/batch_decoder.cpp
     audio_core/hardware_audio_codec.cpp
+    core/gpu_dirty_memory.cpp
     core/memory_acquire.cpp
     core/builtin_patches.cpp
     core/system_test_context.h
@@ -44,6 +45,7 @@ add_executable(tests
     video_core/ampere_selevet_spills.cpp
     video_core/blit_dither.cpp
     video_core/maxwell_numeric.cpp
+    video_core/maxwell_demote_reorder.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
     video_core/framebuffer_clear_layers.cpp
@@ -74,6 +76,9 @@ add_executable(tests
     video_core/ampere_tennis_i2f.cpp
     video_core/ampere_tennis_tessellation.cpp
     video_core/pipeline_cache_files.cpp
+    video_core/amd_astc_decode.cpp
+    video_core/oot_diag.cpp
+    video_core/nx2_host_policy.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
     video_core/gpu_command_safety.cpp
@@ -82,6 +87,7 @@ add_executable(tests
     video_core/ampere_matrix.cpp
     video_core/spirv_software_matrix.cpp
     video_core/spirv_builtin_capabilities.cpp
+    video_core/spirv_amd_subgroup_shuffle.cpp
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp

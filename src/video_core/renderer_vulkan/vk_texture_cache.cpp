@@ -28,6 +28,7 @@
 
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/render_trace.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 
@@ -321,7 +322,8 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 // decode, so streamed textures are ready the frame they are first used instead of seconds later.
 [[nodiscard]] bool WillUseGpuBcnTranscode(const Device& device, const ImageInfo& info) {
     if (!IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
-        IsHugeAstcArray(device, info) || info.type != ImageType::e2D || info.size.depth != 1) {
+        device.PreferHostAstcDecode() || IsHugeAstcArray(device, info) ||
+        info.type != ImageType::e2D || info.size.depth != 1) {
         return false;
     }
     return Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu &&
@@ -334,6 +336,9 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
     }
     if (IsHugeAstcArray(device, info)) {
         return true;
+    }
+    if (device.PreferHostAstcDecode()) {
+        return false;
     }
     if (Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu) {
         return false;
@@ -1225,6 +1230,13 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
       resolution{Settings::values.resolution_info} {
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
+    if (device.PreferHostAstcDecode() && !device.IsOptimalAstcSupported()) {
+        LOG_INFO(Render_Vulkan,
+                 "AMD: ASTC decoded on the CPU (GPU transcode only flushes; RX 6800 OoT dither/"
+                 "flash/FPS)");
+    }
+    VideoCommon::OotDiag::LogBoot(static_cast<u32>(device.GetDriverID()),
+                                  device.IsOptimalAstcSupported(), device.PreferHostAstcDecode());
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
     if (Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu ||
         !device.IsOptimalAstcSupported()) {
@@ -2791,11 +2803,23 @@ bool TextureCacheRuntime::UseOpaqueAstcFormat() const {
         const char* value = std::getenv("EDEN_NX2_ASTC_BC1");
         return value == nullptr || value[0] != '0';
     }();
-    return enabled && !device.IsOptimalAstcSupported() &&
-           Settings::GetAstcRecompression() == Settings::AstcRecompression::Bc3;
+    if (!enabled || device.IsOptimalAstcSupported() ||
+        Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc3) {
+        return false;
+    }
+    // BC1 4x4 two-color blocks turn OoT moss/rock ASTC into black-white dither
+    // (RX 6800; LOD0 A/B unchanged or worse). AMD has no native ASTC, so this
+    // path is the host encode. Keep BC3. EDEN_NX2_ASTC_BC1=1 does not override AMD.
+    const VkDriverIdKHR driver = device.GetDriverID();
+    if (driver == VK_DRIVER_ID_AMD_PROPRIETARY || driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        driver == VK_DRIVER_ID_MESA_RADV) {
+        return false;
+    }
+    return true;
 }
 
 void TextureCacheRuntime::FlushDeferredClear() {
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::DeferredClearFlush);
     scheduler.FlushDeferredClear();
 }
 
@@ -4568,14 +4592,44 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
         .borderColor = VK_BORDER_COLOR_FLOAT_CUSTOM_EXT,
         .unnormalizedCoordinates = VK_FALSE,
     };
+    if (has_depth_comparison && DriverNeedsNearestLod0DepthCompare(device.GetDriverID())) {
+        // Keep compareEnable. AMD LINEAR Dref with implicit LOD is binary noise in
+        // shade (60e791: dropped=0, lit texels clear, interactables clear).
+        ApplyNearestLod0DepthCompare(base_ci);
+        has_linear_filtering = false;
+        has_added_anisotropy = false;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_INFO(Render_Vulkan,
+                     "AMD: depth-compare samplers are nearest LOD0 (LINEAR Dref is 0/1 noise)");
+        }
+    }
     variants.reserve(1);
     Emplace(VariantKey{});
 }
 
-Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth) const noexcept {
+Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view,
+                                     [[maybe_unused]] bool is_depth) const noexcept {
     VariantKey key{};
     key.reduce_anisotropy = has_added_anisotropy && !image_view.SupportsAnisotropy();
     key.force_nearest = has_linear_filtering && IsPixelFormatInteger(image_view.format);
+    // AMD Dref is 0/1 unless both the shader is TEX.DC and the view can compare as a
+    // Vulkan depth image. 14dabd dropped compare on every colour view (including real
+    // R16/R32 shadow maps). 401596 kept compare on every TEX.DC (including garbage
+    // TICs). Both A/Bs still dithered; only the intersection is a legal Dref.
+    // NVIDIA keeps compare always (Alan Wake flashlight, eden #4408).
+    // 60e791 kept compare (dropped=0) and shade still crushed: grain is not the
+    // drop toggle. AMD compare samplers are nearest LOD0 in the constructor.
+    if (has_depth_comparison && device_ptr != nullptr) {
+        const VkDriverIdKHR driver = device_ptr->GetDriverID();
+        // 82c813ca8f with split off: dropped ~4200 vs kept ~150 per 5s and shade
+        // felt worse. That is drop-almost-all. Keep compare (NVIDIA does).
+        key.drop_depth_comparison = false;
+        if (DriverNeedsNearestLod0DepthCompare(driver)) {
+            VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::DrefKept);
+        }
+    }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
     key.srgb_border = has_srgb_border_color && IsPixelFormatSRGB(image_view.format);
@@ -4652,6 +4706,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
     } else if (key.reduce_anisotropy) {
         create_info.anisotropyEnable = static_cast<VkBool32>(default_anisotropy > 1.0f);
         create_info.maxAnisotropy = default_anisotropy;
+    }
+    if (key.drop_depth_comparison) {
+        create_info.compareEnable = VK_FALSE;
     }
     if (!custom_border) {
         create_info.borderColor = ConvertBorderColor(color);
