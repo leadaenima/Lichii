@@ -4596,7 +4596,8 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
     Emplace(VariantKey{});
 }
 
-Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth) const noexcept {
+Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view,
+                                     [[maybe_unused]] bool is_depth) const noexcept {
     VariantKey key{};
     key.reduce_anisotropy = has_added_anisotropy && !image_view.SupportsAnisotropy();
     key.force_nearest = has_linear_filtering && IsPixelFormatInteger(image_view.format);
@@ -4610,12 +4611,12 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
         const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
                          driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                          driver == VK_DRIVER_ID_MESA_RADV;
-        // Harvest 93597b5c38: both kept and dropped stay high. Prior A/Bs already
-        // failed drop-all, keep-TEX.DC, and this intersection for grain. The cavern
-        // god-ray is a volume/RT, not a compare sample. Do not flip this again.
-        key.drop_depth_comparison = amd && !(is_depth && image_view.SupportsDepthComparison());
-        VideoCommon::OotDiag::Add(key.drop_depth_comparison ? VideoCommon::OotDiag::C::DrefDropped
-                                                            : VideoCommon::OotDiag::C::DrefKept);
+        // 82c813ca8f with split off: dropped ~4200 vs kept ~150 per 5s and shade
+        // felt worse. That is drop-almost-all. Keep compare (NVIDIA does).
+        key.drop_depth_comparison = false;
+        if (amd) {
+            VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::DrefKept);
+        }
     }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();

@@ -82,3 +82,30 @@ TEST_CASE("OoT program id uses on-demand readback with split off and Ampere clea
     Settings::SetCurrentProgramIsSwitch2(true);
     REQUIRE(Tegra::Nx2OnDemandCpuReadback());
 }
+
+TEST_CASE("Low OoT skips synchronous buffer downloads so shade cannot Finish-storm",
+          "[video_core][oot][readback]") {
+    const bool previous_switch2 = Settings::CurrentProgramIsSwitch2();
+    const bool previous_ampere = Tegra::g_nx2_ampere.load();
+    const u64 previous_program = Settings::GetCurrentProgramID();
+    const auto previous_accuracy = Settings::values.gpu_accuracy.GetValue();
+    SCOPE_EXIT {
+        Settings::SetCurrentProgramIsSwitch2(previous_switch2);
+        Settings::SetCurrentProgramID(previous_program);
+        Tegra::g_nx2_ampere.store(previous_ampere);
+        Settings::values.gpu_accuracy.SetValue(previous_accuracy);
+    };
+
+    Tegra::g_nx2_ampere.store(false);
+    Settings::SetCurrentProgramIsSwitch2(false);
+    Settings::SetCurrentProgramID(Tegra::kNx2OcarinaOfTime);
+    Settings::values.gpu_accuracy.SetValue(Settings::GpuAccuracy::Low);
+    REQUIRE(Tegra::Nx2SkipSynchronousBufferDownload());
+
+    Settings::values.gpu_accuracy.SetValue(Settings::GpuAccuracy::High);
+    REQUIRE_FALSE(Tegra::Nx2SkipSynchronousBufferDownload());
+
+    Settings::values.gpu_accuracy.SetValue(Settings::GpuAccuracy::Low);
+    Settings::SetCurrentProgramID(0);
+    REQUIRE_FALSE(Tegra::Nx2SkipSynchronousBufferDownload());
+}

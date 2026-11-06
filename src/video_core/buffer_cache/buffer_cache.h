@@ -208,7 +208,9 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
             InlineMemoryImplementation(device_addr, size, tmp_buffer);
             return;
         }
-        DownloadMemory(page_begin, page_end - page_begin);
+        if (!Tegra::Nx2SkipSynchronousBufferDownload()) {
+            DownloadMemory(page_begin, page_end - page_begin);
+        }
     }
     memory_tracker.MarkRegionAsCpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
@@ -256,6 +258,12 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     DAddr device_addr_end_aligned = Common::AlignUp(device_addr + size, Core::DEVICE_PAGESIZE);
     area->start_address = device_addr_start_aligned;
     area->end_address = device_addr_end_aligned;
+    if (Tegra::Nx2SkipSynchronousBufferDownload()) {
+        area->preemtive = true;
+        read_trapped_ranges.Subtract(device_addr_start_aligned,
+                                     device_addr_end_aligned - device_addr_start_aligned);
+        return area;
+    }
     if (memory_tracker.IsRegionPreflushable(device_addr, size)) {
         area->preemtive = true;
         return area;
@@ -292,6 +300,9 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
 
 template <class P>
 void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
+    if (Tegra::Nx2SkipSynchronousBufferDownload()) {
+        return;
+    }
     if constexpr (USE_MEMORY_MAPS) {
         if (download_cpu_read_ranges) {
             download_cpu_read_ranges = false;

@@ -21,6 +21,14 @@ inline constexpr u64 kNx2OcarinaOfTime = 0x0400486024DEC000ULL;
            VideoCommon::GpuSplit::Get().BackRunning();
 }
 
+// 82c813ca8f: #147 still Finish()ed 200–350 times / 5s on Low OoT because
+// GetFlushArea returned preemtive=false, so OnCPURead WaitForSyncOperation'd
+// every guest read. Low already skips texture flushes; skip the buffer wait too.
+[[nodiscard]] inline bool Nx2SkipSynchronousBufferDownload() {
+    return Nx2OnDemandCpuReadback() &&
+           Settings::values.gpu_accuracy.GetValue() != Settings::GpuAccuracy::High;
+}
+
 // MaybeStart must call this every time. Driver id and the unsafe bit are host
 // facts; a session reset that clears only g_nx2_ampere cannot re-enable the split.
 [[nodiscard]] inline bool Nx2HostGpuSplitAllowed() {

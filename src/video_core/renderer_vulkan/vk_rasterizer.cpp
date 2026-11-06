@@ -61,6 +61,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_host_policy.h"
 #include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_profile.h"
 
@@ -1493,7 +1494,8 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
 bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
     if ((True(which & VideoCommon::CacheType::BufferCache))) {
         std::scoped_lock lock{buffer_cache.mutex};
-        if (buffer_cache.IsRegionGpuModified(addr, size)) {
+        if (buffer_cache.IsRegionGpuModified(addr, size) &&
+            !Tegra::Nx2SkipSynchronousBufferDownload()) {
             return true;
         }
     }
