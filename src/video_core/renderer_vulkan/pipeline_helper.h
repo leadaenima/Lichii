@@ -7,9 +7,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
 #include <optional>
+#include <string>
 
 #include <boost/container/small_vector.hpp>
+#include <fmt/format.h>
 
 #include "common/common_types.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -399,6 +402,21 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
         }
         rescaling.PushImage(is_rescaled);
     }
+}
+
+/// AMD proprietary builds these pipelines with DISABLE_OPTIMIZATION (Lichii #210).
+/// 41eee52fc2 kept Dref + nearest LOD0 and shade still crushed: lighting FS, not sampler.
+/// EDEN_NX2_NOOPT_SHADERS=<hash>,... (or all) adds hashes on any driver.
+inline bool BuildsUnoptimized(const Device& device, u64 shader_hash) {
+    static const std::string forced = [] {
+        const char* const value = std::getenv("EDEN_NX2_NOOPT_SHADERS");
+        return value != nullptr ? std::string{value} : std::string{};
+    }();
+    if (!forced.empty() &&
+        (forced == "all" || forced.find(fmt::format("{:016x}", shader_hash)) != std::string::npos)) {
+        return true;
+    }
+    return DriverBuildsUnoptimizedShaders(device.GetDriverID(), shader_hash);
 }
 
 } // namespace Vulkan

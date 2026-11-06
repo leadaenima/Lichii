@@ -1243,6 +1243,13 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (uses_descriptor_buffer) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
+    if (std::ranges::any_of(key.unique_hashes, [this](u64 hash) {
+            return hash != 0 && BuildsUnoptimized(device, hash);
+        })) {
+        flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+        LOG_INFO(Render_Vulkan,
+                 "AMD: building pipeline {:016x} unoptimized (OoT lighting)", key.Hash());
+    }
 
     // AMDVLK can die inside vkCreateGraphicsPipelines (Eglantine #618, offset ~0xafe857).
     // Log hashes before the call so a crash dump's last line names the pipeline.

@@ -46,6 +46,27 @@ TEST_CASE("AMD depth-compare samplers need nearest LOD0, not a drop toggle",
     CHECK(ci.maxLod == 0.25f);
 }
 
+TEST_CASE("AMD proprietary builds OoT lighting unoptimized, not a sampler change",
+          "[video_core][oot][lighting]") {
+    using Vulkan::AmdProprietaryUnoptimizedShader;
+    using Vulkan::DriverBuildsUnoptimizedShaders;
+    using Vulkan::kNx2OotAmdLightingFragmentHash;
+    CHECK(kNx2OotAmdLightingFragmentHash == 0x3c2193d0166610b3ULL);
+    CHECK(AmdProprietaryUnoptimizedShader(kNx2OotAmdLightingFragmentHash));
+    CHECK(AmdProprietaryUnoptimizedShader(0xeff3ccbe1438679dULL));
+    CHECK(AmdProprietaryUnoptimizedShader(0xf9ea14a22394f5b1ULL));
+    CHECK_FALSE(AmdProprietaryUnoptimizedShader(0));
+    CHECK_FALSE(AmdProprietaryUnoptimizedShader(0xdeadbeefULL));
+    CHECK(DriverBuildsUnoptimizedShaders(VK_DRIVER_ID_AMD_PROPRIETARY,
+                                         kNx2OotAmdLightingFragmentHash));
+    CHECK_FALSE(DriverBuildsUnoptimizedShaders(VK_DRIVER_ID_AMD_OPEN_SOURCE,
+                                               kNx2OotAmdLightingFragmentHash));
+    CHECK_FALSE(DriverBuildsUnoptimizedShaders(VK_DRIVER_ID_MESA_RADV,
+                                               kNx2OotAmdLightingFragmentHash));
+    CHECK_FALSE(DriverBuildsUnoptimizedShaders(VK_DRIVER_ID_NVIDIA_PROPRIETARY,
+                                               kNx2OotAmdLightingFragmentHash));
+}
+
 TEST_CASE("AMD drivers prefer host ASTC decode", "[video_core][astc][amd]") {
     using Vulkan::DriverPrefersHostAstcDecode;
     CHECK(DriverPrefersHostAstcDecode(VK_DRIVER_ID_AMD_PROPRIETARY));

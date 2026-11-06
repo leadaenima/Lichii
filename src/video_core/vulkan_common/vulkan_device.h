@@ -249,6 +249,20 @@ inline void ApplyNearestLod0DepthCompare(VkSamplerCreateInfo& ci) noexcept {
     ci.maxLod = 0.25f;
 }
 
+/// OoT scene lighting FS (Lichii #210). AMD proprietary miscompiles it optimized.
+inline constexpr u64 kNx2OotAmdLightingFragmentHash = 0x3c2193d0166610b3ULL;
+
+/// AMDVLK 2.0.353: lighting FS crashes/miscompiles; two compute shaders take minutes.
+[[nodiscard]] inline bool AmdProprietaryUnoptimizedShader(u64 shader_hash) noexcept {
+    return shader_hash == kNx2OotAmdLightingFragmentHash ||
+           shader_hash == 0xeff3ccbe1438679dULL || shader_hash == 0xf9ea14a22394f5b1ULL;
+}
+
+[[nodiscard]] inline bool DriverBuildsUnoptimizedShaders(VkDriverIdKHR id,
+                                                         u64 shader_hash) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY && AmdProprietaryUnoptimizedShader(shader_hash);
+}
+
 enum class NvidiaArchitecture {
     Arch_KeplerOrOlder,
     Arch_Maxwell,
