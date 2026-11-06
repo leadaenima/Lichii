@@ -4592,6 +4592,19 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
         .borderColor = VK_BORDER_COLOR_FLOAT_CUSTOM_EXT,
         .unnormalizedCoordinates = VK_FALSE,
     };
+    if (has_depth_comparison && DriverNeedsNearestLod0DepthCompare(device.GetDriverID())) {
+        // Keep compareEnable. AMD LINEAR Dref with implicit LOD is binary noise in
+        // shade (60e791: dropped=0, lit texels clear, interactables clear).
+        ApplyNearestLod0DepthCompare(base_ci);
+        has_linear_filtering = false;
+        has_added_anisotropy = false;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_INFO(Render_Vulkan,
+                     "AMD: depth-compare samplers are nearest LOD0 (LINEAR Dref is 0/1 noise)");
+        }
+    }
     variants.reserve(1);
     Emplace(VariantKey{});
 }
@@ -4606,15 +4619,14 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view,
     // R16/R32 shadow maps). 401596 kept compare on every TEX.DC (including garbage
     // TICs). Both A/Bs still dithered; only the intersection is a legal Dref.
     // NVIDIA keeps compare always (Alan Wake flashlight, eden #4408).
+    // 60e791 kept compare (dropped=0) and shade still crushed: grain is not the
+    // drop toggle. AMD compare samplers are nearest LOD0 in the constructor.
     if (has_depth_comparison && device_ptr != nullptr) {
         const VkDriverIdKHR driver = device_ptr->GetDriverID();
-        const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
-                         driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
-                         driver == VK_DRIVER_ID_MESA_RADV;
         // 82c813ca8f with split off: dropped ~4200 vs kept ~150 per 5s and shade
         // felt worse. That is drop-almost-all. Keep compare (NVIDIA does).
         key.drop_depth_comparison = false;
-        if (amd) {
+        if (DriverNeedsNearestLod0DepthCompare(driver)) {
             VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::DrefKept);
         }
     }

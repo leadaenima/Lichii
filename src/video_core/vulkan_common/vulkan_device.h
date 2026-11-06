@@ -232,6 +232,23 @@ const u32 GuestWarpSize = 32;
     return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
 }
 
+/// AMD LINEAR+mip Dref is 0/1 noise, not PCF. Keep compare; sample LOD 0 nearest.
+/// 60e7915dfc: dropped=0, kept thousands, shade still crushed until light hits.
+[[nodiscard]] inline bool DriverNeedsNearestLod0DepthCompare(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+           id == VK_DRIVER_ID_MESA_RADV;
+}
+
+inline void ApplyNearestLod0DepthCompare(VkSamplerCreateInfo& ci) noexcept {
+    ci.magFilter = VK_FILTER_NEAREST;
+    ci.minFilter = VK_FILTER_NEAREST;
+    ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    ci.anisotropyEnable = VK_FALSE;
+    ci.maxAnisotropy = 1.0f;
+    ci.minLod = 0.0f;
+    ci.maxLod = 0.25f;
+}
+
 enum class NvidiaArchitecture {
     Arch_KeplerOrOlder,
     Arch_Maxwell,
