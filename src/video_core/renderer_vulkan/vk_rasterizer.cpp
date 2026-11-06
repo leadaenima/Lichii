@@ -61,6 +61,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -1927,6 +1928,7 @@ void RasterizerVulkan::TickFrame() {
         std::scoped_lock lock{texture_cache.mutex};
         texture_cache.TickFrame();
     }
+    VideoCommon::OotDiag::MaybeReport();
     {
         std::scoped_lock lock{buffer_cache.mutex};
         buffer_cache.TickFrame();

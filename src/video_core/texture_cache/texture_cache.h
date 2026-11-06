@@ -32,6 +32,7 @@
 #include "video_core/texture_cache/texture_cache_base.h"
 #include "video_core/texture_cache/util.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/render_trace.h"
 #include "video_core/textures/decoders.h"
@@ -2070,6 +2071,16 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
     const std::span<u8> mapped_span = staging.mapped_span;
     const GPUVAddr gpu_addr = image.gpu_addr;
 
+    if (VideoCommon::OotDiag::Enabled()) {
+        if (True(image.flags & ImageFlagBits::AcceleratedUpload)) {
+            VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::UploadAccelerated);
+        } else if (True(image.flags & ImageFlagBits::Converted)) {
+            VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::UploadCpuConverted);
+        } else {
+            VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::UploadRaw);
+        }
+        VideoCommon::OotDiag::NoteFormats(image.info.format);
+    }
     if (True(image.flags & ImageFlagBits::AcceleratedUpload) && image.host_level_offset != 0) {
         // Only levels >= host_level_offset exist on the host: read each layer's tail of the mip
         // chain into a compact buffer (layer stride = that tail's size) and decode those levels.
@@ -2765,6 +2776,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     if (overwritten_by_clear()) {
         // Stays CpuModified: UpdateRenderTargets' PrepareImage drops the upload only when
         // IsFullClear agrees the clear covers the whole image, and uploads it otherwise.
+        VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::UploadClearSkip);
         runtime.TransitionImageLayout(new_image);
     } else {
         // TODO: Only upload what we need

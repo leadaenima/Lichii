@@ -23,6 +23,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/texture_cache/util.h"
@@ -354,6 +355,8 @@ void BufferCache<P>::DownloadRangesMemory(std::span<const std::pair<DAddr, u64>>
         runtime.CopyBuffer(download_staging.buffer, buffer, std::span{&download.copy, 1}, true);
     }
     runtime.Finish();
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackFinish);
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackBytes, total_size_bytes);
     const u8* const mapped_memory = download_staging.mapped_span.data();
     for (const Download& download : downloads) {
         const DAddr device_addr = slot_buffers[download.buffer_id].CpuAddr() + download.copy.src_offset;
@@ -2577,6 +2580,8 @@ void BufferCache<P>::DownloadBuffersMemory(std::span<const BufferId> buffer_ids)
         runtime.CopyBuffer(download_staging.buffer, buffer, std::span{&download.copy, 1}, true);
     }
     runtime.Finish();
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackFinish);
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackBytes, total_size_bytes);
     const u8* const mapped_memory = download_staging.mapped_span.data();
     for (const Download& download : downloads) {
         const DAddr device_addr = slot_buffers[download.buffer_id].CpuAddr() + download.copy.src_offset;
@@ -2638,6 +2643,8 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
         }
         runtime.CopyBuffer(download_staging.buffer, buffer, copies_span, true);
         runtime.Finish();
+        VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackFinish);
+        VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::ReadbackBytes, total_size_bytes);
         for (const BufferCopy& copy : copies) {
             const DAddr copy_device_addr = buffer.CpuAddr() + copy.src_offset;
             // Undo the modified offset

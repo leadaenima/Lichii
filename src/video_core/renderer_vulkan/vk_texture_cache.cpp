@@ -28,6 +28,7 @@
 
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_oot_diag.h"
 #include "video_core/render_trace.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 
@@ -1234,6 +1235,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
                  "AMD: ASTC decoded on the CPU (GPU transcode only flushes; RX 6800 OoT dither/"
                  "flash/FPS)");
     }
+    VideoCommon::OotDiag::LogBoot(static_cast<u32>(device.GetDriverID()),
+                                  device.IsOptimalAstcSupported(), device.PreferHostAstcDecode());
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
     if (Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu ||
         !device.IsOptimalAstcSupported()) {
@@ -2816,6 +2819,7 @@ bool TextureCacheRuntime::UseOpaqueAstcFormat() const {
 }
 
 void TextureCacheRuntime::FlushDeferredClear() {
+    VideoCommon::OotDiag::Add(VideoCommon::OotDiag::C::DeferredClearFlush);
     scheduler.FlushDeferredClear();
 }
 
@@ -4607,6 +4611,8 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
                          driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                          driver == VK_DRIVER_ID_MESA_RADV;
         key.drop_depth_comparison = amd && !(is_depth && image_view.SupportsDepthComparison());
+        VideoCommon::OotDiag::Add(key.drop_depth_comparison ? VideoCommon::OotDiag::C::DrefDropped
+                                                            : VideoCommon::OotDiag::C::DrefKept);
     }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
