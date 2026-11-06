@@ -221,6 +221,12 @@ enum class FormatType { Linear, Optimal, Buffer };
 /// Subgroup size of the guest emulated hardware (Nvidia has 32 threads per subgroup).
 const u32 GuestWarpSize = 32;
 
+/// AMD has no native ASTC. GPU transcode only Flush()es the decode.
+[[nodiscard]] inline bool DriverPrefersHostAstcDecode(VkDriverIdKHR id) noexcept {
+    return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+           id == VK_DRIVER_ID_MESA_RADV;
+}
+
 enum class NvidiaArchitecture {
     Arch_KeplerOrOlder,
     Arch_Maxwell,
@@ -436,6 +442,14 @@ FN_MAX_LIMIT_LIST
 
     bool IsOptimalAstcSupported() const {
         return is_optimal_astc_supported;
+    }
+
+    /// AMD has no native ASTC. The GPU compute decoder + BC encoder only Flush()es
+    /// (EDEN_NX2_ASTC_FLUSH default), so the next submit can sample a half-written
+    /// BC3 image: shade-concentrated dither, map/text flash, and a flush per texture.
+    /// Host ASTC::Decompress then BC3 encode is the path those A/Bs never reached.
+    bool PreferHostAstcDecode() const {
+        return DriverPrefersHostAstcDecode(GetDriverID());
     }
 
     /// Returns true if geometry shaders are supported.
