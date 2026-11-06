@@ -9,43 +9,76 @@
 #include "video_core/nx2_host_policy.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 
-TEST_CASE("Switch 2 uses on-demand CPU readback when Ampere flag is clear",
+namespace {
+
+void RestoreHostDriver(u32 driver_id, bool unsafe, bool ampere) {
+    Tegra::g_nx2_vk_driver_id.store(driver_id);
+    Tegra::g_nx2_host_split_unsafe.store(unsafe);
+    Tegra::g_nx2_ampere.store(ampere);
+}
+
+} // Anonymous namespace
+
+TEST_CASE("AMD driver IDs match the Vulkan spec", "[video_core][oot][split]") {
+    CHECK(Tegra::Nx2VkDriverAmdProprietary ==
+          static_cast<u32>(VK_DRIVER_ID_AMD_PROPRIETARY));
+    CHECK(Tegra::Nx2VkDriverAmdOpenSource == static_cast<u32>(VK_DRIVER_ID_AMD_OPEN_SOURCE));
+    CHECK(Tegra::Nx2VkDriverGpuSplitFlickers(VK_DRIVER_ID_AMD_PROPRIETARY));
+    CHECK(Tegra::Nx2VkDriverGpuSplitFlickers(VK_DRIVER_ID_AMD_OPEN_SOURCE));
+    CHECK_FALSE(Tegra::Nx2VkDriverGpuSplitFlickers(VK_DRIVER_ID_MESA_RADV));
+    CHECK_FALSE(Tegra::Nx2VkDriverGpuSplitFlickers(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
+    using Vulkan::DriverGpuSplitFlickers;
+    CHECK(DriverGpuSplitFlickers(VK_DRIVER_ID_AMD_PROPRIETARY));
+    CHECK(DriverGpuSplitFlickers(VK_DRIVER_ID_AMD_OPEN_SOURCE));
+    CHECK_FALSE(DriverGpuSplitFlickers(VK_DRIVER_ID_MESA_RADV));
+}
+
+TEST_CASE("a3e94 session reset cannot re-enable an AMD GPU split", "[video_core][oot][split]") {
+    const u32 previous_id = Tegra::g_nx2_vk_driver_id.load();
+    const bool previous_unsafe = Tegra::g_nx2_host_split_unsafe.load();
+    const bool previous_ampere = Tegra::g_nx2_ampere.load();
+    SCOPE_EXIT {
+        RestoreHostDriver(previous_id, previous_unsafe, previous_ampere);
+    };
+
+    // Device ctor on AMD proprietary (harvest driver_id=1).
+    Tegra::Nx2NoteHostVulkanDriver(VK_DRIVER_ID_AMD_PROPRIETARY);
+    REQUIRE_FALSE(Tegra::Nx2HostGpuSplitAllowed());
+
+    // nvdrv Module::Module starts the game ~65s later and clears Ampere. It must
+    // not clear the host driver. This is the a3e94f6b08 failure.
+    Tegra::g_nx2_ampere.store(false);
+    REQUIRE_FALSE(Tegra::Nx2HostGpuSplitAllowed());
+
+    // Even if something wipes only the unsafe bit, the driver id still blocks.
+    Tegra::g_nx2_host_split_unsafe.store(false);
+    REQUIRE_FALSE(Tegra::Nx2HostGpuSplitAllowed());
+
+    Tegra::Nx2NoteHostVulkanDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY);
+    REQUIRE(Tegra::Nx2HostGpuSplitAllowed());
+}
+
+TEST_CASE("OoT program id uses on-demand readback with split off and Ampere clear",
           "[video_core][oot][readback]") {
     const bool previous_switch2 = Settings::CurrentProgramIsSwitch2();
     const bool previous_ampere = Tegra::g_nx2_ampere.load();
+    const u64 previous_program = Settings::GetCurrentProgramID();
     SCOPE_EXIT {
         Settings::SetCurrentProgramIsSwitch2(previous_switch2);
+        Settings::SetCurrentProgramID(previous_program);
         Tegra::g_nx2_ampere.store(previous_ampere);
     };
 
     Tegra::g_nx2_ampere.store(false);
     Settings::SetCurrentProgramIsSwitch2(false);
+    Settings::SetCurrentProgramID(0);
+    REQUIRE_FALSE(VideoCommon::GpuSplit::Get().BackRunning());
     REQUIRE_FALSE(Tegra::Nx2OnDemandCpuReadback());
 
+    Settings::SetCurrentProgramID(Tegra::kNx2OcarinaOfTime);
+    REQUIRE(Tegra::Nx2OnDemandCpuReadback());
+
+    Settings::SetCurrentProgramID(0);
     Settings::SetCurrentProgramIsSwitch2(true);
     REQUIRE(Tegra::Nx2OnDemandCpuReadback());
-
-    Settings::SetCurrentProgramIsSwitch2(false);
-    Tegra::g_nx2_ampere.store(true);
-    REQUIRE(Tegra::Nx2OnDemandCpuReadback());
-}
-
-TEST_CASE("AMD proprietary and open-source GPU split flickers", "[video_core][oot][split]") {
-    using Vulkan::DriverGpuSplitFlickers;
-    CHECK(DriverGpuSplitFlickers(VK_DRIVER_ID_AMD_PROPRIETARY));
-    CHECK(DriverGpuSplitFlickers(VK_DRIVER_ID_AMD_OPEN_SOURCE));
-    CHECK_FALSE(DriverGpuSplitFlickers(VK_DRIVER_ID_MESA_RADV));
-    CHECK_FALSE(DriverGpuSplitFlickers(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-}
-
-TEST_CASE("Host GPU split is refused when the driver flag is set", "[video_core][oot][split]") {
-    const bool previous = Tegra::g_nx2_host_split_unsafe.load();
-    SCOPE_EXIT {
-        Tegra::g_nx2_host_split_unsafe.store(previous);
-    };
-
-    Tegra::g_nx2_host_split_unsafe.store(false);
-    REQUIRE(Tegra::Nx2HostGpuSplitAllowed());
-    Tegra::g_nx2_host_split_unsafe.store(true);
-    REQUIRE_FALSE(Tegra::Nx2HostGpuSplitAllowed());
 }

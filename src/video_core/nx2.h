@@ -20,9 +20,24 @@ namespace Tegra {
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
 
-// AMD proprietary/open: Low + GPU-thread split flickers overlays (Lichii #163).
-// Set from the Vulkan device; Module::Module clears it with the other session flags.
+// Host Vulkan driver. Set only from Device; nvdrv Module must not clear these —
+// the physical GPU does not change when a game loads. a3e94f6b08 failed because
+// Module::Module reset the unsafe flag ~65s later and MaybeStart started the split.
+inline std::atomic<u32> g_nx2_vk_driver_id{0};
 inline std::atomic<bool> g_nx2_host_split_unsafe{false};
+
+// vulkan_core.h VK_DRIVER_ID_AMD_PROPRIETARY / AMD_OPEN_SOURCE (AMDVLK).
+inline constexpr u32 Nx2VkDriverAmdProprietary = 1;
+inline constexpr u32 Nx2VkDriverAmdOpenSource = 2;
+
+[[nodiscard]] inline bool Nx2VkDriverGpuSplitFlickers(u32 driver_id) noexcept {
+    return driver_id == Nx2VkDriverAmdProprietary || driver_id == Nx2VkDriverAmdOpenSource;
+}
+
+inline void Nx2NoteHostVulkanDriver(u32 driver_id) {
+    g_nx2_vk_driver_id.store(driver_id, std::memory_order_relaxed);
+    g_nx2_host_split_unsafe.store(Nx2VkDriverGpuSplitFlickers(driver_id), std::memory_order_relaxed);
+}
 
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Title 1
 // runs command lists the GPU writes each frame (20-byte entries its culling fills in); read

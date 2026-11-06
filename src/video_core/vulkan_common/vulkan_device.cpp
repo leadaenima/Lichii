@@ -481,8 +481,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const bool is_amd_driver =
         driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
     const bool is_amd = is_amd_driver || is_radv;
-    Tegra::g_nx2_host_split_unsafe.store(DriverGpuSplitFlickers(driver_id),
-                                         std::memory_order_relaxed);
+    Tegra::Nx2NoteHostVulkanDriver(static_cast<u32>(driver_id));
     if (DriverGpuSplitFlickers(driver_id)) {
         LOG_INFO(Render_Vulkan,
                  "AMD: GPU thread split disabled (Low+SPLIT flickers; RX 6800 OoT map/text flash)");
