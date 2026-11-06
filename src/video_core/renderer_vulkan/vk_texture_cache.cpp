@@ -2791,8 +2791,19 @@ bool TextureCacheRuntime::UseOpaqueAstcFormat() const {
         const char* value = std::getenv("EDEN_NX2_ASTC_BC1");
         return value == nullptr || value[0] != '0';
     }();
-    return enabled && !device.IsOptimalAstcSupported() &&
-           Settings::GetAstcRecompression() == Settings::AstcRecompression::Bc3;
+    if (!enabled || device.IsOptimalAstcSupported() ||
+        Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc3) {
+        return false;
+    }
+    // BC1 4x4 two-color blocks turn OoT moss/rock ASTC into black-white dither
+    // (RX 6800; LOD0 A/B unchanged or worse). AMD has no native ASTC, so this
+    // path is the host encode. Keep BC3. EDEN_NX2_ASTC_BC1=1 does not override AMD.
+    const VkDriverIdKHR driver = device.GetDriverID();
+    if (driver == VK_DRIVER_ID_AMD_PROPRIETARY || driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+        driver == VK_DRIVER_ID_MESA_RADV) {
+        return false;
+    }
+    return true;
 }
 
 void TextureCacheRuntime::FlushDeferredClear() {
@@ -4576,16 +4587,16 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
     VariantKey key{};
     key.reduce_anisotropy = has_added_anisotropy && !image_view.SupportsAnisotropy();
     key.force_nearest = has_linear_filtering && IsPixelFormatInteger(image_view.format);
-    // AMDVLK/RADV Dref-sample a colour view (OoT TEX.DC on a garbage TIC, #173) as 0/1, which
-    // looks like black or scrambled mips. NVIDIA needed that compare left on (Alan Wake
-    // flashlight, eden #4408). Match the shader: keep compare only for a real depth image.
+    // AMDVLK/RADV Dref-sample a colour view (OoT TEX.DC on a garbage TIC, #173) as 0/1.
+    // NVIDIA needed compare left on (Alan Wake flashlight, eden #4408). Only drop when
+    // this view cannot compare: a real depth image keeps TSC compare even if the shader
+    // did not mark the descriptor is_depth (minimap / shadow).
     if (has_depth_comparison && device_ptr != nullptr) {
         const VkDriverIdKHR driver = device_ptr->GetDriverID();
         const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
                          driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                          driver == VK_DRIVER_ID_MESA_RADV;
-        key.drop_depth_comparison =
-            amd && (!is_depth || !image_view.SupportsDepthComparison());
+        key.drop_depth_comparison = amd && !image_view.SupportsDepthComparison();
     }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();

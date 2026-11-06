@@ -120,6 +120,7 @@ public:
     void LogMemoryStatistics() const;
 
     /// True when ASTC is re-compressed to BC3 and opaque images may use BC1 instead.
+    /// Always false on AMD (BC1 dithers OoT moss/rock) and when EDEN_NX2_ASTC_BC1=0.
     bool UseOpaqueAstcFormat() const;
 
     bool CanDownloadMsaa(const VideoCommon::ImageInfo& info) const;
