@@ -260,11 +260,17 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     };
     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
                                            device_addr_end_aligned - device_addr_start_aligned);
-    // Mark only data that the GPU wrote. A mark stays for the session and sends later GPU writes
-    // in the range to a download at each fence.
+    // A preflushable mark persists and downloads later GPU writes at every fence. Ampere
+    // titles instead keep read traps and flush on demand (zortos293/Lichii#147): the mark
+    // was ~800 MB/s of fence copies on High accuracy in Ocarina (#163).
     if (!area->preemtive) {
-        memory_tracker.MarkRegionAsPreflushable(device_addr_start_aligned,
-                                                device_addr_end_aligned - device_addr_start_aligned);
+        if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+            memory_tracker.MarkRegionAsPreflushable(
+                device_addr_start_aligned, device_addr_end_aligned - device_addr_start_aligned);
+        } else {
+            read_trapped_ranges.Subtract(device_addr_start_aligned,
+                                         device_addr_end_aligned - device_addr_start_aligned);
+        }
     } else {
         // The core keeps this area and has no mark. The next GPU write here must arm the range
         // again, which ends the area and sets the trap.

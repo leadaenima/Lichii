@@ -4587,16 +4587,16 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
     VariantKey key{};
     key.reduce_anisotropy = has_added_anisotropy && !image_view.SupportsAnisotropy();
     key.force_nearest = has_linear_filtering && IsPixelFormatInteger(image_view.format);
-    // AMDVLK/RADV Dref-sample a colour view (OoT TEX.DC on a garbage TIC, #173) as 0/1.
-    // NVIDIA needed compare left on (Alan Wake flashlight, eden #4408). Only drop when
-    // this view cannot compare: a real depth image keeps TSC compare even if the shader
-    // did not mark the descriptor is_depth (minimap / shadow).
-    if (has_depth_comparison && device_ptr != nullptr) {
+    // AMD Dref on a colour albedo/garbage TIC is 0/1. TEX.DC (is_depth) is the shadow
+    // term: keep TSC compare even when the map is R16/R32 and the view cannot compare
+    // as a Vulkan depth image. Dropping that made shade a checkerboard (14dabd A/B).
+    // NVIDIA keeps compare always (Alan Wake flashlight, eden #4408).
+    if (has_depth_comparison && device_ptr != nullptr && !is_depth) {
         const VkDriverIdKHR driver = device_ptr->GetDriverID();
         const bool amd = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
                          driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
                          driver == VK_DRIVER_ID_MESA_RADV;
-        key.drop_depth_comparison = amd && !image_view.SupportsDepthComparison();
+        key.drop_depth_comparison = amd;
     }
     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();

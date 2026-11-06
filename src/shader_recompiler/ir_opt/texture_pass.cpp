@@ -580,7 +580,11 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
     case IR::Opcode::GetCbufU32:
     case IR::Opcode::LoadStorage32:
         return load_word(inst, 0);
-    case IR::Opcode::CompositeExtractU32x2: {
+    case IR::Opcode::CompositeExtractU32x2:
+    case IR::Opcode::CompositeExtractU32x4: {
+        // LD.128 / GetCbufU32x4: OoT lighting walks a per-tile light list and extracts the
+        // shadow-map handle from the 128-bit record (#102). Stopping here fell back to the
+        // list address and Dref-sampled a garbage TIC (checkerboard in shade).
         const IR::Value element{inst->Arg(1)};
         if (!element.IsImmediate() || inst->Arg(0).IsImmediate()) return false;
         return load_word(inst->Arg(0).InstRecursive(), element.U32() * 4);
