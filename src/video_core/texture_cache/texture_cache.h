@@ -787,6 +787,13 @@ bool TextureCache<P>::RescaleRenderTargets() {
 template <class P>
 void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     using namespace VideoCommon::Dirty;
+    struct ClearingScope {
+        bool& flag;
+        ~ClearingScope() {
+            flag = false;
+        }
+    } clearing_scope{clearing_render_targets};
+    clearing_render_targets = is_clear;
     auto& flags = maxwell3d->dirty.flags;
     if (!flags[Dirty::RenderTargets]) {
         for (size_t index = 0; index < NUM_RT; ++index) {
@@ -1075,6 +1082,13 @@ template <class P>
 bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
                                 const Tegra::Engines::Fermi2D::Surface& src,
                                 const Tegra::Engines::Fermi2D::Config& copy) {
+    // A deferred clear parked before this copy has to land before it: realizing it afterwards
+    // starts its clear pass after the copy and wipes what the copy wrote. That is what made
+    // Ocarina of Time draw its terrain layer over the scene (#101): the game clears the
+    // occlusion depth, blits the scene depth over it, and reads it back during the layer draw.
+    // GetFramebufferId only flushes when it creates a framebuffer, so the bug starts on the
+    // second frame. Texture cache copies bypass render passes and keep stream order here.
+    runtime.FlushDeferredClear();
     const auto result = GetBlitImages(dst, src, copy);
     if (!result) {
         return false;
@@ -2695,8 +2709,67 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         DeleteImage(overlap_id);
     }
 
-    // TODO: Only upload what we need
-    RefreshContents(new_image, new_image_id);
+    // A new render target that the clear binding it overwrites whole (every channel, the whole
+    // image) needs no upload from guest memory first: Ocarina of Time creates ~4 such targets a
+    // frame outdoors, and uploading them was ~15% of the GPU back thread (#141).
+    const auto overwritten_by_clear = [&] {
+        if (!clearing_render_targets || !join_copies_to_do.empty() ||
+            new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
+            new_info.resources.layers != 1 || new_info.num_samples != 1) {
+            return false;
+        }
+        const auto& regs = maxwell3d->regs;
+        const auto& surface = regs.clear_surface;
+        if (surface.layer != 0) {
+            return false;
+        }
+        const u32 width = new_info.size.width;
+        const u32 height = new_info.size.height;
+        if (regs.clear_control.use_scissor != 0) {
+            const auto& scissor = regs.scissor_test[0];
+            if (scissor.min_x != 0 || scissor.min_y != 0 || scissor.max_x < width ||
+                scissor.max_y < height) {
+                return false;
+            }
+        }
+        // The clear covers the framebuffer's render area, the smallest bound target.
+        for (u32 index = 0; index < regs.rt_control.count && index < NUM_RT; ++index) {
+            const auto& rt = regs.rt[index];
+            if (rt.Address() != 0 && rt.format != Tegra::RenderTargetFormat::NONE &&
+                (rt.width < width || rt.height < height)) {
+                return false;
+            }
+        }
+        if (regs.zeta_enable && regs.zeta.Address() != 0 &&
+            (regs.zeta_size.width < width || regs.zeta_size.height < height)) {
+            return false;
+        }
+        const bool is_depth_target = regs.zeta_enable && regs.zeta.Address() == gpu_addr;
+        const bool full_stencil = surface.S && regs.stencil_front_mask == 0xFF;
+        switch (VideoCore::Surface::GetFormatType(new_info.format)) {
+        case VideoCore::Surface::SurfaceType::ColorTexture: {
+            const u32 index = surface.RT;
+            return surface.R && surface.G && surface.B && surface.A && index < NUM_RT &&
+                   index < regs.rt_control.count && regs.rt[index].Address() == gpu_addr;
+        }
+        case VideoCore::Surface::SurfaceType::Depth:
+            return is_depth_target && surface.Z;
+        case VideoCore::Surface::SurfaceType::Stencil:
+            return is_depth_target && full_stencil;
+        case VideoCore::Surface::SurfaceType::DepthStencil:
+            return is_depth_target && surface.Z && full_stencil;
+        default:
+            return false;
+        }
+    };
+    if (overwritten_by_clear()) {
+        // Stays CpuModified: UpdateRenderTargets' PrepareImage drops the upload only when
+        // IsFullClear agrees the clear covers the whole image, and uploads it otherwise.
+        runtime.TransitionImageLayout(new_image);
+    } else {
+        // TODO: Only upload what we need
+        RefreshContents(new_image, new_image_id);
+    }
 
     if (can_rescale) {
         ScaleUp(new_image);
@@ -2923,6 +2996,8 @@ ImageId TextureCache<P>::FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr) 
 template <class P>
 std::pair<u32, u32> TextureCache<P>::PrepareDmaImage(ImageId dst_id, GPUVAddr base_addr,
                                                      bool mark_as_modified) {
+    // As in BlitImage: land a parked deferred clear before the DMA write.
+    runtime.FlushDeferredClear();
     const auto& image = slot_images[dst_id];
     const auto base = image.TryFindBase(base_addr);
     PrepareImage(dst_id, mark_as_modified, false);
@@ -3669,6 +3744,8 @@ void TextureCache<P>::PrepareImageView(ImageViewId image_view_id, bool is_modifi
 
 template <class P>
 void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<ImageCopy> copies) {
+    // As in BlitImage: land a parked deferred clear before the copy overwrites the image.
+    runtime.FlushDeferredClear();
     Image& dst = slot_images[dst_id];
     Image& src = slot_images[src_id];
     if (True(dst.flags & ImageFlagBits::UnwrittenSparse) ||
